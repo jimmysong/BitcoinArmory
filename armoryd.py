@@ -129,6 +129,7 @@ class PrivateKeyNotFound(Exception): pass
 class WalletDoesNotExist(Exception): pass
 class LockboxDoesNotExist(Exception): pass
 class AddressNotInWallet(Exception): pass
+class BlockchainNotReady(Exception): pass
 
 # A dictionary that includes the names of all functions an armoryd user can
 # call from the armoryd server. Implemented on the server side so that a client
@@ -925,7 +926,7 @@ class Armory_Json_Rpc_Server(jsonrpc.JSONRPC):
          else:
             retVal = AmountToJSON(self.curWlt.getBalance(baltype))
       else:
-         LOGERROR('Blockchain not ready. Values will not be reported.')
+         raise BlockchainNotReady('Wallet is not loaded yet.')
 
       return retVal
 
@@ -2663,11 +2664,14 @@ class Armory_Daemon(object):
             self.heartbeatFunctions = []
             self.newBlockFunctions = defaultdict(list)
 
+            self.settingsPath = CLI_OPTIONS.settingsPath
+            self.settings = SettingsFile(self.settingsPath)
+
             # armoryd can take a default lockbox. If it's not passed in, load
             # some lockboxes.
             if lb:
                self.curLB = lb
-            else:
+            elif False:
                # Get the lockboxes in standard Armory LB file and store pointers
                # to them, assuming any exist.
                lbPaths = getLockboxFilePaths()
@@ -2766,6 +2770,7 @@ class Armory_Daemon(object):
          TheBDM.bdv().enableZeroConf("") #mempoolfile.encode('utf-8'))        
          
          self.timeReceived = TheBDM.bdv().blockchain().top().getTimestamp()
+         self.latestBlockNum = TheBDM.bdv().blockchain().top().getBlockHeight()
          LOGINFO('Blockchain loaded. Wallets synced!')
          LOGINFO('Current block number: %d', self.latestBlockNum)
          LOGINFO('Current block received at: %d', self.timeReceived)
@@ -2782,7 +2787,6 @@ class Armory_Daemon(object):
                         func_newTx       = self.execOnNewTx, \
                         func_newBlock    = self.execOnNewBlock)
          reactor.connectTCP('127.0.0.1', BITCOIN_PORT, self.NetworkingFactory)
-         reactor.run()
    
       elif action == NEW_ZC_ACTION:
          #A zero conf Tx conerns one of the address Armory is tracking, pull the 
@@ -2851,6 +2855,10 @@ class Armory_Daemon(object):
          
          
    #############################################################################
+   def writeSetting(self, settingName, val):
+      self.settings.set(settingName, val)
+
+   #############################################################################
    def set_auth(self, resource):
       passwordfile = ARMORYD_CONF_FILE
       # Create User Name & Password file to use locally
@@ -2890,7 +2898,8 @@ class Armory_Daemon(object):
       for wltID, wlt in self.WltMap.iteritems():
          LOGWARN('Registering wallet: %s' % wltID)
          wlt.registerWallet()
-      TheBDM.setOnlineMode(True)
+      TheBDM.goOnline()
+      reactor.run()
 
    #############################################################################
    @classmethod

@@ -1,8 +1,8 @@
 import sys
-from twisted.trial._synctest import SkipTest
-from armoryengine.BDM import BDM_BLOCKCHAIN_READY
 sys.path.append('..')
 from pytest.Tiab import *
+from twisted.trial._synctest import SkipTest
+from armoryengine.BDM import BDM_BLOCKCHAIN_READY
 import json
 
 from armoryd import Armory_Daemon
@@ -81,7 +81,7 @@ class ArmoryDSession:
             time.sleep(1)
             i += 1
          if i >= 10:
-            raise RuntimeError("Cannot have more than one ArmoryD session simultaneously")
+            raise RuntimeError("ArmoryD session not running")
             
       except:
          self.clean()
@@ -97,7 +97,6 @@ class ArmoryDStartupTest(TiabTest):
    def tearDown(self):
       self.armoryDSession.clean()
             
-   @SkipTest
    def testJSONGetinfo(self):
       self.armoryDSession.callArmoryD(['setactivewallet', FIRST_WLT_NAME])
       actualResult = self.armoryDSession.callArmoryD(['getarmorydinfo'])
