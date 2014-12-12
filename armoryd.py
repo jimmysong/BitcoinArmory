@@ -95,6 +95,7 @@ from collections import defaultdict
 import decimal
 from inspect import *
 import json
+import sys
 
 from twisted.cred.checkers import FilePasswordDB
 from twisted.internet import reactor
@@ -2616,7 +2617,7 @@ class Armory_Daemon(object):
       if armorydIsRunning == True:
          # Execute the command and return to the command line.
          self.executeCommand()
-         os._exit(0)
+         sys.exit()
       else:
          # Make sure we're actually able to do something before proceeding.
          if onlineModeIsPossible(TheBDM.btcdir):
