@@ -185,10 +185,9 @@ class BlockDataManager(object):
       self.btcdir = BTC_HOME_DIR
       self.armoryDBDir = ARMORY_DB_DIR
       self.lastPctLoad = 0
-      
+
       self.topBlockHeight = 0
       self.cppNotificationListenerList = []
-   
    
    #############################################################################
    @ActLikeASingletonBDM

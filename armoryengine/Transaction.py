@@ -732,6 +732,28 @@ class PyTx(BlockComponent):
    def getHashHex(self, endianness=LITTLEENDIAN):
       return binary_to_hex(self.getHash(), endOut=endianness)
 
+
+   def getNonMalleableHash(self):
+      """
+      This method returns a 32-byte ID much like a regular transaction
+      ID, but contains just outpoints being spent and recip-val pairs.
+      This ID should stay constant through malleability attacks, and 
+      more importantly:  is can be used to maintain association with
+      offline/multisig transactions as signatures are collected.
+      For instance, when you create an unsigned transaction, we can
+      store the MallID in the wallet with the comment, and that MallID
+      will be reocgnizable even after the signatures are added and it 
+      is broadcast.
+      """
+      binOut = BinaryPacker()
+      for txin in self.inputs:
+         binOut.put(BINARY_CHUNK, txin.outpoint.serialize())
+      for txout in self.outputs:
+         binOut.put(UINT64, txout.getValue())
+         binOut.put(BINARY_CHUNK, txout.getScript())
+      return hash256(binOut.getBinaryString())
+
+
    def copy(self):
       return PyTx().unserialize(self.serialize())
 

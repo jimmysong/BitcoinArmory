@@ -1606,8 +1606,8 @@ class Armory_Json_Rpc_Server(jsonrpc.JSONRPC):
                'version':           getVersionInt(BTCARMORY_VERSION),
                'build':             BTCARMORY_BUILD,
                #'protocolversion':   0,
-               'walletversionstr':  getVersionString(PYBTCWALLET_VERSION),
-               'walletversion':     getVersionInt(PYBTCWALLET_VERSION),
+               'walletversionstr':  getVersionString(ARMORY_WALLET_VERSION),
+               'walletversion':     getVersionInt(ARMORY_WALLET_VERSION),
                'bdmstate':          TheBDM.getState(),
                'balance':           AmountToJSON(self.curWlt.getBalance()) \
                                     if isReady else -1,

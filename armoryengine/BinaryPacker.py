@@ -12,8 +12,10 @@
 # Orig Date:  20 November, 2011
 #
 ################################################################################
-from armoryengine.ArmoryUtils import LITTLEENDIAN, int_to_binary, packVarInt
-UINT8, UINT16, UINT32, UINT64, INT8, INT16, INT32, INT64, VAR_INT, VAR_STR, FLOAT, BINARY_CHUNK = range(12)
+from armoryengine.ArmoryUtils import LITTLEENDIAN, int_to_binary, packVarInt, \
+                                      toUnicode, toBytes, lenBytes, BitSet
+UINT8, UINT16, UINT32, UINT64, INT8, INT16, INT32, INT64,  \
+         VAR_INT, VAR_STR, VAR_UNICODE, FLOAT, BINARY_CHUNK, BITSET = range(14)
 from struct import pack, unpack
 
 class PackerError(Exception): pass
@@ -68,19 +70,24 @@ class BinaryPacker(object):
          self.binaryConcat += pack(E+'q', theData)
       elif varType == VAR_INT:
          self.binaryConcat += packVarInt(theData)[0]
-      elif varType == VAR_STR:
-         self.binaryConcat += packVarInt(len(theData))[0]
-         self.binaryConcat += theData
+      elif varType in [VAR_STR, VAR_UNICODE]:
+         # VAR_UNICODE is unpacked differently for unicode, but same for pack
+         self.binaryConcat += packVarInt(lenBytes(theData))[0]
+         self.binaryConcat += toBytes(theData)
       elif varType == FLOAT:
          self.binaryConcat += pack(E+'f', theData)
       elif varType == BINARY_CHUNK:
-         if width==None:
+         if width is None:
             self.binaryConcat += theData
          else:
             if len(theData)>width:
-               raise PackerError, 'Too much data to fit into fixed width field'
+               raise PackerError('Too much data to fit into fixed width field')
             self.binaryConcat += theData.ljust(width, '\x00')
+      elif varType == BITSET:
+         if width < theData.getNumBits()/8:
+            raise PackerError('Too much data to fit into fixed width field')
+         self.put(BINARY_CHUNK, theData.toBinaryString(), width)
       else:
-         raise PackerError, "Var type not recognized!  VarType="+str(varType)
+         raise PackerError("Var type not recognized!  VarType="+str(varType))
 
 

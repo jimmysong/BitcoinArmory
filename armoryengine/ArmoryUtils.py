@@ -65,9 +65,9 @@ DEFAULT = 'DEFAULT'
 LEVELDB_BLKDATA = 'leveldb_blkdata'
 LEVELDB_HEADERS = 'leveldb_headers'
 
-# Version Numbers 
-BTCARMORY_VERSION    = (0, 93,  1, 0)  # (Major, Minor, Bugfix, AutoIncrement) 
-PYBTCWALLET_VERSION  = (1, 35,  0, 0)  # (Major, Minor, Bugfix, AutoIncrement)
+# Version Numbers
+BTCARMORY_VERSION      = (0, 97,  9, 0)  # (Major, Minor, Bugfix, AutoIncrement)
+ARMORY_WALLET_VERSION  = (2,  0,  0, 0)  # (Major, Minor, Bugfix, AutoIncrement)
 
 ARMORY_DONATION_ADDR = '1ArmoryXcfq7TnCSuZa9fQjRYwJ4bkRKfv'
 ARMORY_DONATION_PUBKEY = ( '04'
@@ -150,6 +150,10 @@ UINT8_MAX  = 2**8-1
 UINT16_MAX = 2**16-1
 UINT32_MAX = 2**32-1
 UINT64_MAX = 2**64-1
+INT8_MAX  = 2**7-1
+INT16_MAX = 2**15-1
+INT32_MAX = 2**31-1
+INT64_MAX = 2**63-1
 
 RightNow = time.time
 SECOND   = 1
@@ -203,8 +207,10 @@ class SignatureError(Exception): pass
 class KeyDataError(Exception): pass
 class ChecksumError(Exception): pass
 class WalletAddressError(Exception): pass
+class WalletUpdateError(Exception): pass
 class PassphraseError(Exception): pass
 class EncryptionError(Exception): pass
+class KdfError(Exception): pass
 class InterruptTestError(Exception): pass
 class NetworkIDError(Exception): pass
 class UnknownNetworkPayload(Exception): pass
@@ -227,6 +233,9 @@ class UstxError(Exception): pass
 class P2SHNotSupportedError(Exception): pass
 class NonBase58CharacterError(Exception): pass
 class isMSWallet(Exception): pass
+class UninitializedError(Exception): pass
+class MultisigError(Exception): pass
+class MultiThreadingError(Exception): pass
 
 # Get the host operating system
 opsys = platform.system()
@@ -580,7 +589,7 @@ if sys.argv[0]=='ArmoryQt.py':
    print 'Loading Armory Engine:'
    print '   Armory Version:      ', getVersionString(BTCARMORY_VERSION)
    print '   Armory Build:        ', BTCARMORY_BUILD
-   print '   PyBtcWallet  Version:', getVersionString(PYBTCWALLET_VERSION)
+   print '   PyBtcWallet  Version:', getVersionString(ARMORY_WALLET_VERSION)
    print 'Detected Operating system:', OS_NAME
    print '   OS Variant            :', OS_VARIANT
    print '   User home-directory   :', USER_HOME_DIR
@@ -1190,7 +1199,7 @@ LOGINFO('************************************************************')
 LOGINFO('Loading Armory Engine:')
 LOGINFO('   Armory Version        : ' + getVersionString(BTCARMORY_VERSION))
 LOGINFO('   Armory Build:         : ' + str(BTCARMORY_BUILD))
-LOGINFO('   PyBtcWallet  Version  : ' + getVersionString(PYBTCWALLET_VERSION))
+LOGINFO('   PyBtcWallet  Version  : ' + getVersionString(ARMORY_WALLET_VERSION))
 LOGINFO('Detected Operating system: ' + OS_NAME)
 LOGINFO('   OS Variant            : ' + (OS_VARIANT[0] if OS_MACOSX else '-'.join(OS_VARIANT)))
 LOGINFO('   User home-directory   : ' + USER_HOME_DIR)
@@ -1797,6 +1806,8 @@ def RightNowStr(fmt=DEFAULT_DATE_FORMAT):
 # UPDATE:  mini-private-key format requires vanilla sha256...
 def sha1(bits):
    return hashlib.new('sha1', bits).digest()
+def sha224(bits):
+   return hashlib.new('sha224', bits).digest()
 def sha256(bits):
    return hashlib.new('sha256', bits).digest()
 def sha512(bits):
@@ -1813,18 +1824,20 @@ def hash160(s):
    return Cpp.BtcUtils().getHash160_SWIG(s)
 
 
-def HMAC(key, msg, hashfunc=sha512, hashsz=None):
+def HMAC(key, msg, hashfunc=sha512, blocksize=None):
    """ This is intended to be simple, not fast.  For speed, use HDWalletCrypto() """
-   hashsz = len(hashfunc('')) if hashsz==None else hashsz
-   key = (hashfunc(key) if len(key)>hashsz else key)
-   key = key.ljust(hashsz, '\x00')
+   blocksize = len(hashfunc('')) if blocksize==None else blocksize
+   key = (hashfunc(key) if len(key)>blocksize else key)
+   key = key.ljust(blocksize, '\x00')
    okey = ''.join([chr(ord('\x5c')^ord(c)) for c in key])
    ikey = ''.join([chr(ord('\x36')^ord(c)) for c in key])
    return hashfunc( okey + hashfunc(ikey + msg) )
 
-HMAC256 = lambda key,msg: HMAC(key, msg, sha256, 32)
-HMAC512 = lambda key,msg: HMAC(key, msg, sha512, 64)
-
+# Armory 0.92 and earlier had a buggy HMAC implementation...!  
+HMAC256_buggy = lambda key,msg: HMAC(key, msg, sha256,  32)
+HMAC512_buggy = lambda key,msg: HMAC(key, msg, sha512,  64)
+HMAC256       = lambda key,msg: HMAC(key, msg, sha256,  64)
+HMAC512       = lambda key,msg: HMAC(key, msg, sha512, 128)
 
 ################################################################################
 def prettyHex(theStr, indent='', withAddr=True, major=8, minor=8):
@@ -1861,19 +1874,23 @@ def pprintHex(theStr, indent='', withAddr=True, major=8, minor=8):
    print prettyHex(theStr, indent, withAddr, major, minor)
 
 
+
+################################################################################
 def pprintDiff(str1, str2, indent=''):
-   if not len(str1)==len(str2):
-      print 'pprintDiff: Strings are different length!'
-      return
+   #$if not len(str1)==len(str2):
+      #$print 'pprintDiff: Strings are different length!'
+      #$return
 
    byteDiff = []
-   for i in range(len(str1)):
+   for i in range(min(len(str1), len(str2))):
       if str1[i]==str2[i]:
-         byteDiff.append('-')
+         byteDiff.append('--')
       else:
-         byteDiff.append('X')
+         byteDiff.append('XX')
 
    pprintHex(''.join(byteDiff), indent=indent)
+   pprintHex(binary_to_hex(str1))
+   pprintHex(binary_to_hex(str2))
 
 
 ##### Switch endian-ness #####
@@ -1963,7 +1980,7 @@ def binary_to_int(b, endIn=LITTLEENDIAN):
    return hex_to_int(h)
 
 ##### INT/BITS #####
-
+# These two methods are deprecated in favor of the BitSet class
 def int_to_bitset(i, widthBytes=0):
    bitsOut = []
    while i>0:
@@ -1979,6 +1996,156 @@ def bitset_to_int(bitset):
    for i,bit in enumerate(bitset):
       n += (0 if bit=='0' else 1) * 2**i
    return n
+
+
+
+################################################################################
+class BitSet(object):
+   """
+   A very simplie implementation of a BitSet, intended for serialization and
+   deserialization (thus the size of the BitSet must be a multiple of 8).  
+   It's not intended to be fast:  if you need to make thousands of bitsets
+   holding millions of flags, this isn't the class to use.
+   """
+   ############################################################
+   def __init__(self, numBits=0):
+      if not numBits%8 == 0:
+         LOGWARN('Number of bits must be a multiple of 8.  Rounding up...')
+
+      self.bitList = [0] * roundUpMod(numBits, 8)
+
+   ############################################################
+   def __len__(self):
+      return self.getNumBits()
+
+   ############################################################
+   def getNumBits(self):
+      return len(self.bitList)
+
+   ############################################################
+   def reset(self, state=False):
+      newVal = 1 if state else 0
+      for i in range(len(self.bitList)):
+         self.setBit(i, newVal)
+         
+   
+   ############################################################
+   def setBit(self, index, val):
+      try:
+         val = int(val)
+      except:
+         raise BadInputError('Invalid setBit call: "%s"' % str(val))
+
+      if not val in [0,1]:
+         raise BadInputError('Input value must be 0 or 1, got %d' % val) 
+
+      self.bitList[index] = val
+
+   ############################################################
+   def getBit(self, index):
+      return self.bitList[index]
+
+   ############################################################
+   def getSlice(self, start, nbits):
+      bs = BitSet(nbits)
+      for i in range(nbits):
+         bs.bitList[i] = self.bitList[i+start]
+      return bs
+
+   ############################################################
+   def toBitString(self):
+      return ''.join(['1' if b else '0' for b in self.bitList])
+
+   ############################################################
+   def toBinaryString(self, byteWidth=None):
+      if self.getNumBits() == 0:
+         return ''
+
+      if byteWidth is None:
+         byteWidth = self.getNumBits()/8
+
+      if byteWidth < self.getNumBits()/8:
+         raise BadInputError('Requested width does not match bitset')
+
+      return int_to_binary(self.toInteger(), 
+                           widthBytes=byteWidth,
+                           endOut=BIGENDIAN)
+
+   ############################################################
+   def toInteger(self):
+      n = 0
+      for i,bit in enumerate(self.bitList[::-1]):
+         n += bit * (2**i)
+      return n
+      
+
+   ############################################################
+   def copy(self, newSize=None):
+      if newSize is None:
+         newSize = self.getNumBits()
+
+      if newSize < self.getNumBits():
+         LOGWARN('Truncating BitSet from %d bits to %d bits',
+                                    self.getNumBits(), newSize)
+
+      bs = BitSet(newSize)
+      for i in range(newSize):
+         bs.bitList[i] = 0 if i>=self.getNumBits() else self.bitList[i]
+
+      return bs
+   
+
+   ############################################################
+   @staticmethod
+   def CreateFromBitString(bitstr):
+      """
+      A "bit string" is just a list of '1' and '0's in a string
+      """
+      bitstr = bitstr.replace(' ','')
+      bs = BitSet(len(bitstr))
+      for i in range(len(bitstr)):
+         bs.setBit(i, int(bitstr[i]))
+      return bs
+
+   ############################################################
+   @staticmethod
+   def CreateFromBinaryString(binstr):
+      """
+      This is the most compact representation of a BitSet, raw binary out
+      """
+      nBytes = len(binstr)
+      readInt = binary_to_int(binstr, BIGENDIAN)
+      return BitSet.CreateFromInteger(readInt, nBytes*8)
+
+   ############################################################
+   @staticmethod
+   def CreateFromInteger(ival, numBits=0):
+   
+      # Could use log(ival, 2) but no need for transcendental functions
+      blist = []
+      while ival>0:
+         ival,r = divmod(ival,2)
+         blist.append(r)
+         
+      if numBits == 0:
+         numBits = len(blist)
+      else:
+         if len(blist) > numBits:
+            raise BadInputError('Requested nBits cannot contain input integer')
+
+         if not numBits%8 == 0:
+            # Will be updated below
+            LOGWARN('Number of bits must be a multiple of 8.  Rounding up...')
+
+      numBits = roundUpMod(numBits, 8)
+
+      while len(blist) < numBits:
+         blist.append(0)
+
+      bs = BitSet(len(blist))
+      bs.bitList = blist[::-1]
+      return bs
+         
 
 
 
@@ -2273,6 +2440,7 @@ def bytesToHumanSize(nBytes):
       return '%0.1f PB' % (nBytes/PETABYTE)
 
 
+#############################################################################
 ##### HEXSTR/VARINT #####
 def packVarInt(n):
    """ Writes 1,3,5 or 9 bytes depending on the size of n """
@@ -2291,8 +2459,7 @@ def unpackVarInt(hvi):
    else: assert(False)
 
 
-
-
+#############################################################################
 def fixChecksumError(binaryStr, chksum, hashFunc=hash256):
    """
    Will only try to correct one byte, as that would be the most
@@ -2309,10 +2476,12 @@ def fixChecksumError(binaryStr, chksum, hashFunc=hash256):
 
    return ''
 
+#############################################################################
 def computeChecksum(binaryStr, nBytes=4, hashFunc=hash256):
    return hashFunc(binaryStr)[:nBytes]
 
 
+#############################################################################
 def verifyChecksum(binaryStr, chksum, hashFunc=hash256, fixIfNecessary=True, \
                                                               beQuiet=False):
    """
@@ -2370,6 +2539,7 @@ def verifyChecksum(binaryStr, chksum, hashFunc=hash256, fixIfNecessary=True, \
    return ''
 
 
+#############################################################################
 # Taken directly from rpc.cpp in reference bitcoin client, 0.3.24
 def binaryBits_to_difficulty(b):
    """ Converts the 4-byte binary difficulty string to a float """
@@ -2385,9 +2555,32 @@ def binaryBits_to_difficulty(b):
    return dDiff
 
 
+#############################################################################
 # TODO:  I don't actually know how to do this, yet...
 def difficulty_to_binaryBits(i):
    pass
+
+
+#############################################################################
+def roundUpMod(val, mod):
+   return ((int(val)- 1) / mod + 1) * mod
+
+
+#############################################################################
+def padString(s, mod, pad='\x00'):
+   currSz = len(s)
+   needSz = roundUpMod(currSz, mod)
+   return s + pad*(needSz-currSz)
+
+#############################################################################
+def getLeadingBits(binStr, nBits):
+   numBytes = roundUpMod(nBits, 8) / 8 
+   modShift = (8 - (nBits%8)) % 8
+   if numBytes > len(binStr):
+      raise ValueError('Expect %d bits; got %d bits' % (nBits, len(binStr)*8))
+   bitInt = binary_to_int(binStr[:numBytes], endIn=BIGENDIAN) >> modShift
+   return int_to_binary(bitInt, endOut=BIGENDIAN, widthBytes=numBytes)
+
 
 ################################################################################
 def CreateQRMatrix(dataToEncode, errLevel=QRErrorCorrectLevel.L):
@@ -2590,7 +2783,7 @@ def SplitSecret(secret, needed, pieces, nbytes=None, use_random_x=False):
    lasthmac = secret[:]
    othernum = []
    for i in range(pieces+needed-1):
-      lasthmac = HMAC512(lasthmac, 'splitsecrets')[:nbytes]
+      lasthmac = HMAC512_buggy(lasthmac, 'splitsecrets')[:nbytes]
       othernum.append(binary_to_int(lasthmac))
 
    def poly(x):
@@ -2810,70 +3003,135 @@ def decodeMiniPrivateKey(keyStr):
 
    return sha256(keyStr)
 
+################################################################################
+def parseBip32KeyData(theStr, verifyPub=True):
+   from BinaryUnpacker import BinaryUnpacker, UINT32, UINT8, BINARY_CHUNK
+   if not isLikelyDataType(theStr, DATATYPE.Base58):
+      raise KeyDataError('Invalid BIP32 priv key format; not base58')
+
+   binStr = base58_to_binary(theStr)
+   if not len(binStr)==82:  
+      raise KeyDataError('Invalid BIP32 key serialize format; not 78+chk bytes')
+
+   if not theStr[:4] in ['tprv','tpub','xprv','xpub']:
+      raise KeyDataError('Invalid BIP32 key serialize format; wrong type bytes')
+
+   binStr = base58_to_binary(theStr)
+   bytes78,chk = binStr[:78],binStr[-4:]
+   bytes78 = verifyChecksum(bytes78, chk)
+   if len(bytes78)==0:
+      raise KeyDataError('Unrecoverable checksum error')
+
+   output = {}
+   toUnpack = BinaryUnpacker(bytes78)
+   ignoreData           = toUnpack.get(UINT32)  # xpub/tpub/xprv/tprv
+   output['childDepth'] = toUnpack.get(UINT8)
+   output['parFinger']  = toUnpack.get(BINARY_CHUNK, 4)
+   output['childIndex'] = toUnpack.get(UINT32)
+   output['chaincode']  = toUnpack.get(BINARY_CHUNK, 32)
+   output['keyData']    = toUnpack.get(BINARY_CHUNK, 33)
+   output['isTestnet']  = theStr[:4] in ['tprv','tpub']
+   output['isPublic']   = theStr[:4] in ['xpub','tpub']
+
+   if output['isPublic']:
+      sbdPubkCompressed = SecureBinaryData(output['keyData'])
+      if not CryptoECDSA().VerifyPublicKeyValid(sbdPubkCompressed):
+         raise KeyDataError('Not a valid public key!')
+
+   return output
+   
 
 ################################################################################
 def parsePrivateKeyData(theStr):
-      hexChars = '01234567890abcdef'
-      b58Chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+   """
+   This handles most standard formats for private keys, including raw hex,
+   sipa/wif format, xprv/tprv, and a few related serialization types
+   
+   This returns the raw private key, 32 bytes if uncompressed, 33 bytes ending
+   with \x01 if compressed (calling code must check for this).  The second
+   output is a string that can be displayed identifying the key type.
+   """
 
-      hexCount = sum([1 if c in hexChars else 0 for c in theStr.lower()])
-      b58Count = sum([1 if c in b58Chars else 0 for c in theStr])
-      canBeHex = hexCount==len(theStr)
-      canBeB58 = b58Count==len(theStr)
 
-      binEntry = ''
-      keyType = ''
-      isMini = False
-      if canBeB58 and not canBeHex:
-         if len(theStr) in (22, 30):
-            # Mini-private key format!
-            try:
-               binEntry = decodeMiniPrivateKey(theStr)
-            except KeyDataError:
-               raise BadAddressError('Invalid mini-private key string')
-            keyType = 'Mini Private Key Format'
-            isMini = True
-         elif len(theStr) in range(48,53):
-            binEntry = base58_to_binary(theStr)
-            keyType = 'Plain Base58'
-         else:
-            raise BadAddressError('Unrecognized key data')
-      elif canBeHex:
-         binEntry = hex_to_binary(theStr)
-         keyType = 'Plain Hex'
+   # xprv/tprv keys are recognizable right away, do it immediately
+   if len(theStr)>=4 and theStr[:4] in ['tprv','tpub','xprv','xpub']:
+      bip32keymap = parseBip32KeyData(theStr)
+      if not bip32keymap['isTestnet'] == USE_TESTNET:
+         raise NetworkIDError('Key is for wrong network!')
+      if bip32keymap['isPublic']:
+         raise KeyDataError('Attempted to parse public key as a private key!')
+
+      # Remove leading 0x00 byte which only identifies it's a priv key, add 
+      # a 0x01 byte to tell the caller this key requires using compressed pub
+      privKey = bip32keymap['keyData'][1:] + '\x01'
+      return privKey, 'BIP32 Private Key (%s)' % theStr[:4]
+
+      
+   # Now do all the other stuff
+   hexChars = '01234567890abcdef'
+   b58Chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+   hexCount = sum([1 if c in hexChars else 0 for c in theStr.lower()])
+   b58Count = sum([1 if c in b58Chars else 0 for c in theStr])
+   canBeHex = hexCount==len(theStr)
+   canBeB58 = b58Count==len(theStr)
+
+   binEntry = ''
+   keyType = ''
+
+   if canBeB58 and not canBeHex:
+      if len(theStr) in (22, 30):
+         # Mini-private key format!
+         binEntry = decodeMiniPrivateKey(theStr)
+         keyType = 'Mini Private Key'
+         return binEntry, keyType
+      elif len(theStr) in [49,50,51,52]:
+         binEntry = base58_to_binary(theStr)
+         keyType = 'Base58'
       else:
          raise BadAddressError('Unrecognized key data')
+   elif canBeHex:
+      binEntry = hex_to_binary(theStr)
+      keyType = 'hex'
+   else:
+      raise BadAddressError('Unrecognized key data')
 
 
-      if len(binEntry)==36 or (len(binEntry)==37 and binEntry[0]==PRIVKEYBYTE):
-         if len(binEntry)==36:
-            keydata = binEntry[:32 ]
-            chk     = binEntry[ 32:]
-            binEntry = verifyChecksum(keydata, chk)
-            if not isMini:
-               keyType = 'Raw %s with checksum' % keyType.split(' ')[1]
-         else:
-            # Assume leading 0x80 byte, and 4 byte checksum
-            keydata = binEntry[ :1+32 ]
-            chk     = binEntry[  1+32:]
-            binEntry = verifyChecksum(keydata, chk)
-            binEntry = binEntry[1:]
-            if not isMini:
-               keyType = 'Standard %s key with checksum' % keyType.split(' ')[1]
+   if len(binEntry)==37 and binEntry[0]==PRIVKEYBYTE:
+      # Assume leading 0x80 byte, and 4 byte checksum
+      keydata = binEntry[ :1+32 ]
+      chk     = binEntry[  1+32:]
+      binEntry = verifyChecksum(keydata, chk)
+      if len(binEntry)==0:
+         raise InvalidHashError('Private Key checksum failed!')
+      binEntry = binEntry[1:]
+      keyType = 'Standard %s key with checksum' % keyType
+   elif len(binEntry)==38 and [binEntry[0],binEntry[-5]] ==[PRIVKEYBYTE,'\x01']:
+      # Assume leading 0x80 byte, and 4 byte checksum
+      keydata = binEntry[ :1+33 ]
+      chk     = binEntry[  1+33:]
+      binEntry = verifyChecksum(keydata, chk)
+      if len(binEntry)==0:
+         raise InvalidHashError('Private Key checksum failed!')
+      binEntry = binEntry[1:]
+      keyType = 'Standard %s key (compressed pub) with checksum' % keyType
+   elif len(binEntry)==33 and binEntry[-1]=='\x01':
+      # Leave the extra byte to be extra sure the calling codes knows
+      keyType = 'Plain %s key (compressed pub)' % keyType
+   #elif len(binEntry)==37 and binEntry[-5]=='\x01':
+      # Leave the extra byte to be extra sure the calling codes knows
+      #binEntry = binEntry[:33]
+      #keyType = 'Plain %s key (compressed pub) with checksum' % keyType
 
-         if binEntry=='':
-            raise InvalidHashError('Private Key checksum failed!')
-      elif len(binEntry) in (33, 37) and binEntry[-1]=='\x01':
-         raise CompressedKeyError('Compressed Public keys not supported!')
-      return binEntry, keyType
+   return binEntry, keyType
 
 
 
 ################################################################################
-def encodePrivKeyBase58(privKeyBin):
-   bin33 = PRIVKEYBYTE + privKeyBin
-   chk = computeChecksum(bin33)
-   return binary_to_base58(bin33 + chk)
+def encodePrivKeyBase58(privKeyBin, isCompressed=False):
+   binPriv = PRIVKEYBYTE + privKeyBin + ('\x01' if isCompressed else '')
+   chk = computeChecksum(binPriv)
+   return binary_to_base58(binPriv + chk)
 
 
 
@@ -3406,13 +3664,18 @@ def send_email(send_from, server, password, send_to, subject, text):
 
 
 #############################################################################
-def DeriveChaincodeFromRootKey(sbdPrivKey):
-   return SecureBinaryData( HMAC256( sbdPrivKey.getHash256(), \
-                                     'Derive Chaincode from Root Key'))
+def DeriveChaincodeFromRootKey_135(sbdPrivKey):
+   # The original 1.35 wallets use an HMAC256 implementation that had an
+   # incorrect constant.  Apparently no one else tried to replicate the
+   # process with an independent crypto library.   The end result is that
+   # we must keep the buggy implementation with us for as long as we keep
+   # supporting Armory 1.35 wallets.
+   return SecureBinaryData( HMAC256_buggy( hash256(sbdPrivKey.toBinStr()), \
+                                     'Derive Chaincode from Root Key') )
 
 
 #############################################################################
-def getLastBytesOfFile(filename, nBytes=500*1024):
+def getLastBytesOfFile(filename, nBytes=500*KILOBYTE):
    if not os.path.exists(filename):
       LOGERROR('File does not exist!')
       return ''
@@ -3451,7 +3714,7 @@ def HardcodedKeyMaskParams():
    def hardcodeCreateSecurePrintPassphrase(secret):
       if isinstance(secret, basestring):
          secret = SecureBinaryData(secret)
-      bin7 = HMAC512(secret.getHash256(), paramMap['SALT'].toBinStr())[:7]
+      bin7 = HMAC512_buggy(secret.getHash256(), paramMap['SALT'].toBinStr())[:7]
       out,bin7 = SecureBinaryData(binary_to_base58(bin7 + hash256(bin7)[0])), None
       return out
 

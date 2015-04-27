@@ -180,6 +180,8 @@ class ArmoryMainWindow(QMainWindow):
       # reconnecting connection, so we keep it around.
       self.SingletonConnectedNetworkingFactory = None
 
+      self.moduleProvidedFuncs = {}
+
       # Kick off announcement checking, unless they explicitly disabled it
       # The fetch happens in the background, we check the results periodically
       self.announceFetcher = None
@@ -1022,6 +1024,21 @@ class ArmoryMainWindow(QMainWindow):
             funcList = getattr(self, funcListName)
             plugFunc = getattr(plugObj, plugFuncName)
             funcList.append(plugFunc)
+
+
+         # Throughout Armory, we may include some stubs that we know will be
+         # present if some certain modules are present, so we have modules    
+         # expose functions to self.moduleProvidedFuncs, which can be called
+         # by Armory code, throwing an error if no module has provided it.
+         if hasattr(plugObj, 'exposeFunctions'):
+            funcMap = getattr(plugObj, 'exposeFunctions')
+            for exposeName,funcName in funcMap.iteritems():
+               funcName = '%s:%s' % (name, exposeName)
+               self.moduleProvidedFuncs[funcName] = getattr(plugObj, funcName)
+               LOGINFO('Module "%s" provides function: "%s"' % (name, funcName))
+               
+         
+
                                     
    ############################################################################
    def loadArmoryModules(self):

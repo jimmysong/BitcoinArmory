@@ -100,3 +100,19 @@ def TimeThisFunction(func):
       timer.stopTimer(func.__name__)
       return ret
    return inner
+
+
+def TimeThisFunctionNamed(name):
+   def newDecorator(func):
+      timer = Timer()
+      def inner(*args, **kwargs):
+         timer.startTimer(name)
+         ret = func(*args, **kwargs)
+         timer.stopTimer(name)
+         return ret
+      return inner
+
+   return newDecorator
+   
+
+
