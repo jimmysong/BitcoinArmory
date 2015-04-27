@@ -13,7 +13,7 @@
 #
 ################################################################################
 from armoryengine.ArmoryUtils import LITTLEENDIAN, int_to_binary, packVarInt
-UINT8, UINT16, UINT32, UINT64, INT8, INT16, INT32, INT64, VAR_INT, VAR_STR, FLOAT, BINARY_CHUNK = range(12)
+UINT8, UINT16, UINT32, UINT64, INT8, INT16, INT32, INT64, VAR_INT, VAR_STR, VAR_UNICODE, FLOAT, BINARY_CHUNK, BITSET = range(14)
 from struct import pack, unpack
 
 class PackerError(Exception): pass
@@ -68,7 +68,7 @@ class BinaryPacker(object):
          self.binaryConcat += pack(E+'q', theData)
       elif varType == VAR_INT:
          self.binaryConcat += packVarInt(theData)[0]
-      elif varType == VAR_STR:
+      elif varType in [VAR_STR, VAR_UNICODE]:
          self.binaryConcat += packVarInt(len(theData))[0]
          self.binaryConcat += theData
       elif varType == FLOAT:

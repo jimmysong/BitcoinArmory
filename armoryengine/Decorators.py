@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright (C) 2011-2015, Armory Technologies, Inc.                         
+# Copyright (C) 2011-2015, Armory Technologies, Inc.
 # Distributed under the GNU Affero General Public License (AGPL v3)
 # See LICENSE or http://www.gnu.org/licenses/agpl.html
 #
@@ -37,7 +37,7 @@ def EmailOutput(send_from, server, password, send_to, subject='Armory Output'):
 
 # Windows does not handle extensions very well in QFileDialog.getSaveFileName
 # When double extensions (e.g. .sigcollect.tx) are used windows will return duplicates.
-# 
+#
 # This decorator removes just the longest repeating extension
 # Examples:
 #     filename.a.b.c.a.b.c will reduce to filename.a.b.c
@@ -104,13 +104,13 @@ def catchErrsForJSON(func):
       finally:
          # Delete circular references and return the error dict.
          if errTB:
-            del errTB 
+            del errTB
             del errFrame  # Not totally sure this is necessary. Just in case....
          return rv
    return inner
 
 #Makes sure only a single thread is running the method at a given time,
-#using threading.Lock() 
+#using threading.Lock()
 def singleEntrantMethod(func):
    @functools.wraps(func)  # Pull in certain "helper" data from dec'd func
    def inner(self, *args, **kwargs):
@@ -128,3 +128,61 @@ def singleEntrantMethod(func):
          self.mutex.release()
       return rt
    return inner
+
+################################################################################
+# Enforce Argument Types -- Decorator factory (for a decorator with args)
+def VerifyArgTypes(**typemap):
+
+   # If None appears in any of the type lists, replace with type(None)
+   # And also convert to tuple
+   for varName,typeList in typemap.iteritems():
+      if isinstance(typeList, (list, tuple)):
+         newTypeList = []
+         for typeObj in typeList:
+            if typeObj is None:
+               newTypeList.append(type(None))
+            else:
+               newTypeList.append(typeObj)
+         typemap[varName] = tuple(newTypeList)
+
+   # Create an error str to identify what arguments failed and what's expected
+   def generateErrorMsg(argname, var):
+      errStr = 'Argument "%s" is %s;  Expected ' % (argname, str(type(var)))
+      if isinstance(typemap[argname], (list,tuple)):
+         errStr += ' or '.join([str(t) for t in typemap[argname]])
+      else:
+         errStr += '%s' % typemap[argname]
+      return errStr
+
+   import inspect
+   # We need to return a function that has;
+   #     Input:   function + args
+   #     Output:  wrapped function that checks argument list for types
+
+
+   def decorator(func):
+
+      aspec = inspect.getargspec(func)
+      for key,val in typemap.iteritems():
+         if not key in aspec.args:
+            raise TypeError('Function "%s" has no argument "%s"'% (func.__name__,key))
+
+
+      def wrappedFunc(*args, **kwargs):
+
+         for i,arg in enumerate(args):
+            if i>=len(aspec.args):
+               continue
+            aname = aspec.args[i]
+            if aname in typemap and not isinstance(arg, typemap[aname]):
+               raise TypeError(generateErrorMsg(aname, arg))
+
+         for aname,val in kwargs.iteritems():
+            if aname in typemap and not isinstance(val, typemap[aname]):
+               raise TypeError(generateErrorMsg(aname, val))
+
+         return func(*args, **kwargs)
+
+      return wrappedFunc
+
+   return decorator
